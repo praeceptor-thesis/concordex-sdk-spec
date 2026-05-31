@@ -66,4 +66,4 @@ Apache-2.0 (same as the SDK repos).
 
 ## Maintainer
 
-matt@praeceptor-thesis.com
+matt@eastern-shore-solutions.com

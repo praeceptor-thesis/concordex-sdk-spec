@@ -21,7 +21,7 @@ repository. No SDK ships a version the spec hasn't blessed.
 
 Default: `https://api.concordex.dev`. The constructor MUST accept an
 override (used for staging, self-hosted, and local development against
-`https://staging.api.praeceptor-thesis.com` or `http://localhost:8080`).
+`https://staging.api.eastern-shore-solutions.com` or `http://localhost:8080`).
 
 ### 1.2 Authentication
 
