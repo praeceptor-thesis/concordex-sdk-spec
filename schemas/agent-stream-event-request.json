@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://spec.concordex.dev/schemas/agent-stream-event-request.json",
+  "title": "AgentStreamEventRequest",
+  "description": "Request body for POST /v1/agent-stream/event",
+  "type": "object",
+  "required": ["kind", "agent_subject_id", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": ["subject_says", "tool_call", "tool_result", "observation"]
+    },
+    "agent_subject_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "payload": {
+      "type": "object"
+    },
+    "interaction_id": {
+      "type": "string"
+    },
+    "interaction_kind": {
+      "type": "string",
+      "default": "chat_session"
+    },
+    "subjects": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/subject" }
+    },
+    "speaker_subject_id": {
+      "type": "string"
+    },
+    "speaker_role": {
+      "type": "string"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "metadata": {
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "subject": {
+      "type": "object",
+      "required": ["subject_id"],
+      "additionalProperties": false,
+      "properties": {
+        "subject_id": { "type": "string", "minLength": 1 },
+        "role":       { "type": "string" },
+        "kind":       { "type": "string" },
+        "metadata":   { "type": "object" }
+      }
+    }
+  }
+}

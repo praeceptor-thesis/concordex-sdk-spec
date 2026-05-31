@@ -1,0 +1,86 @@
+{
+  "$schema_version": "0.5.0",
+  "$description": "Test vectors for verify_webhook_signature. Each fixture: drive the SDK helper with (payload, signature_header, secret, tolerance_seconds). The result MUST equal `valid`. `payload` is the raw request body as a UTF-8 string; the SDK helper signs and compares against the `t.payload` form.",
+  "$signature_format": "Header: 't=<unix_seconds>,v1=<hex_hmac_sha256(secret, f\"{t}.{payload}\")>'",
+  "$mock_now_unix": 1748563200,
+  "fixtures": [
+    {
+      "name": "valid_basic",
+      "payload": "{\"kind\":\"status.ingest_done\",\"frame_count\":3}",
+      "secret": "whsec_test_basic_secret_1234567890",
+      "header": "t=1748563200,v1=<COMPUTE>",
+      "tolerance_seconds": 300,
+      "now_unix": 1748563200,
+      "valid": true,
+      "note": "Runner computes v1 = hmac_sha256(secret, f'{t}.{payload}') and replaces <COMPUTE> before driving the SDK."
+    },
+    {
+      "name": "valid_within_tolerance",
+      "payload": "{\"hello\":\"world\"}",
+      "secret": "whsec_test_tolerance_secret_abcdefgh",
+      "header": "t=1748563000,v1=<COMPUTE>",
+      "tolerance_seconds": 300,
+      "now_unix": 1748563200,
+      "valid": true,
+      "note": "200 seconds old, tolerance 300 — accepted."
+    },
+    {
+      "name": "rejected_outside_tolerance",
+      "payload": "{\"hello\":\"world\"}",
+      "secret": "whsec_test_tolerance_secret_abcdefgh",
+      "header": "t=1748562000,v1=<COMPUTE>",
+      "tolerance_seconds": 300,
+      "now_unix": 1748563200,
+      "valid": false,
+      "note": "1200 seconds old, tolerance 300 — rejected."
+    },
+    {
+      "name": "rejected_wrong_secret",
+      "payload": "{\"hello\":\"world\"}",
+      "secret": "whsec_test_wrong_secret_xxxxxxxxxx",
+      "header_signed_with": "whsec_test_correct_secret_xxxxxxx",
+      "header": "t=1748563200,v1=<COMPUTE_WITH_OTHER>",
+      "tolerance_seconds": 300,
+      "now_unix": 1748563200,
+      "valid": false,
+      "note": "Runner computes v1 with header_signed_with, then drives SDK with secret. Mismatch must be rejected."
+    },
+    {
+      "name": "rejected_missing_v1",
+      "payload": "{\"hello\":\"world\"}",
+      "secret": "whsec_test_basic_secret_1234567890",
+      "header": "t=1748563200",
+      "tolerance_seconds": 300,
+      "now_unix": 1748563200,
+      "valid": false
+    },
+    {
+      "name": "rejected_missing_t",
+      "payload": "{\"hello\":\"world\"}",
+      "secret": "whsec_test_basic_secret_1234567890",
+      "header": "v1=deadbeef",
+      "tolerance_seconds": 300,
+      "now_unix": 1748563200,
+      "valid": false
+    },
+    {
+      "name": "rejected_malformed_t",
+      "payload": "{\"hello\":\"world\"}",
+      "secret": "whsec_test_basic_secret_1234567890",
+      "header": "t=notanumber,v1=deadbeef",
+      "tolerance_seconds": 300,
+      "now_unix": 1748563200,
+      "valid": false
+    },
+    {
+      "name": "valid_empty_payload",
+      "payload": "",
+      "secret": "whsec_empty_payload_secret_xxxxxxxxx",
+      "header": "t=1748563200,v1=<COMPUTE>",
+      "tolerance_seconds": 300,
+      "now_unix": 1748563200,
+      "valid": true,
+      "note": "Test ping bodies may be empty; verifier MUST handle empty payload."
+    }
+  ]
+}

@@ -1,0 +1,167 @@
+{
+  "$schema_version": "0.5.0",
+  "$description": "Each entry: drive the SDK with `method` + `args`. The resulting POST body MUST equal `expected_body` after JSON normalization (sort keys, no extra whitespace, no trailing newline). Snake_case keys here are canonical wire keys — SDK runners translate args to their idiomatic naming via §8 of sdk-spec.md.",
+  "fixtures": [
+    {
+      "name": "subject_says_minimal",
+      "method": "subject_says",
+      "args": {
+        "agent_subject_id": "user:ws_test:bot",
+        "subject_id": "user:ws_test:cust",
+        "text": "I want a refund."
+      },
+      "expected_path": "/v1/agent-stream/event",
+      "expected_body": {
+        "kind": "subject_says",
+        "agent_subject_id": "user:ws_test:bot",
+        "payload": { "text": "I want a refund." },
+        "interaction_kind": "chat_session",
+        "speaker_subject_id": "user:ws_test:cust"
+      }
+    },
+    {
+      "name": "subject_says_with_interaction_and_subjects",
+      "method": "subject_says",
+      "args": {
+        "agent_subject_id": "user:ws_test:bot",
+        "subject_id": "user:ws_test:cust",
+        "text": "Hi.",
+        "interaction_id": "int_abc",
+        "subjects": [
+          { "subject_id": "user:ws_test:bot",  "role": "agent",    "kind": "agent" },
+          { "subject_id": "user:ws_test:cust", "role": "customer", "kind": "human" }
+        ]
+      },
+      "expected_path": "/v1/agent-stream/event",
+      "expected_body": {
+        "kind": "subject_says",
+        "agent_subject_id": "user:ws_test:bot",
+        "payload": { "text": "Hi." },
+        "interaction_id": "int_abc",
+        "interaction_kind": "chat_session",
+        "subjects": [
+          { "subject_id": "user:ws_test:bot",  "role": "agent",    "kind": "agent" },
+          { "subject_id": "user:ws_test:cust", "role": "customer", "kind": "human" }
+        ],
+        "speaker_subject_id": "user:ws_test:cust"
+      }
+    },
+    {
+      "name": "tool_call_basic",
+      "method": "tool_call",
+      "args": {
+        "subject_id": "user:ws_test:bot",
+        "tool": "refund.issue",
+        "args": { "amount": 9900, "currency": "usd" }
+      },
+      "expected_path": "/v1/agent-stream/event",
+      "expected_body": {
+        "kind": "tool_call",
+        "agent_subject_id": "user:ws_test:bot",
+        "payload": { "tool": "refund.issue", "args": { "amount": 9900, "currency": "usd" } },
+        "interaction_kind": "chat_session",
+        "speaker_subject_id": "user:ws_test:bot",
+        "speaker_role": "agent"
+      }
+    },
+    {
+      "name": "tool_result_basic",
+      "method": "tool_result",
+      "args": {
+        "subject_id": "user:ws_test:bot",
+        "tool": "refund.issue",
+        "result": { "refund_id": "re_123", "status": "succeeded" }
+      },
+      "expected_path": "/v1/agent-stream/event",
+      "expected_body": {
+        "kind": "tool_result",
+        "agent_subject_id": "user:ws_test:bot",
+        "payload": { "tool": "refund.issue", "result": { "refund_id": "re_123", "status": "succeeded" } },
+        "interaction_kind": "chat_session",
+        "speaker_subject_id": "user:ws_test:bot"
+      }
+    },
+    {
+      "name": "observation_basic",
+      "method": "observation",
+      "args": {
+        "agent_subject_id": "user:ws_test:sensor",
+        "subjects": [
+          { "subject_id": "user:ws_test:sensor", "role": "service", "kind": "sensor" }
+        ],
+        "payload": { "kind": "video_keyframe", "frame_index": 42 }
+      },
+      "expected_path": "/v1/agent-stream/event",
+      "expected_body": {
+        "kind": "observation",
+        "agent_subject_id": "user:ws_test:sensor",
+        "payload": { "kind": "video_keyframe", "frame_index": 42 },
+        "interaction_kind": "chat_session",
+        "subjects": [
+          { "subject_id": "user:ws_test:sensor", "role": "service", "kind": "sensor" }
+        ]
+      }
+    },
+    {
+      "name": "check_subject",
+      "method": "check",
+      "args": {
+        "subject_id": "user:ws_test:bot"
+      },
+      "expected_path": "/v1/cb/check",
+      "expected_body": {
+        "scope": "subject",
+        "scope_ref": "user:ws_test:bot"
+      }
+    },
+    {
+      "name": "check_interaction",
+      "method": "check",
+      "args": {
+        "interaction_id": "int_abc"
+      },
+      "expected_path": "/v1/cb/check",
+      "expected_body": {
+        "scope": "interaction",
+        "scope_ref": "int_abc"
+      }
+    }
+  ],
+  "validation_failures": [
+    {
+      "name": "emit_event_unknown_kind",
+      "method": "emit_event",
+      "args": { "kind": "nonsense", "agent_subject_id": "user:ws_test:bot" },
+      "expected_exception": "ValidationError_or_ArgumentError",
+      "expected_message_contains": "kind"
+    },
+    {
+      "name": "check_neither_arg",
+      "method": "check",
+      "args": {},
+      "expected_exception": "ValidationError_or_ArgumentError",
+      "expected_message_contains": "exactly one"
+    },
+    {
+      "name": "check_both_args",
+      "method": "check",
+      "args": { "subject_id": "x", "interaction_id": "y" },
+      "expected_exception": "ValidationError_or_ArgumentError",
+      "expected_message_contains": "exactly one"
+    },
+    {
+      "name": "client_construct_missing_prefix",
+      "method": "construct",
+      "args": { "api_key": "sk_wrong_prefix" },
+      "expected_exception": "ValidationError_or_ArgumentError",
+      "expected_message_contains": "ck_"
+    },
+    {
+      "name": "client_construct_empty_key",
+      "method": "construct",
+      "args": { "api_key": "" },
+      "expected_exception": "ValidationError_or_ArgumentError",
+      "expected_message_contains": "ck_"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://spec.concordex.dev/schemas/cb-check-request.json",
+  "title": "CBCheckRequest",
+  "description": "Request body for POST /v1/cb/check",
+  "type": "object",
+  "required": ["scope", "scope_ref"],
+  "additionalProperties": false,
+  "properties": {
+    "scope":     { "type": "string", "enum": ["subject", "interaction"] },
+    "scope_ref": { "type": "string", "minLength": 1 }
+  }
+}

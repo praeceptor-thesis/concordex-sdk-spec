@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://spec.concordex.dev/schemas/cb-check-response.json",
+  "title": "CBCheckResponse",
+  "description": "Response body for POST /v1/cb/check",
+  "type": "object",
+  "required": ["state", "allow", "warning"],
+  "properties": {
+    "state":   { "type": "string", "enum": ["closed", "half_open", "open"] },
+    "allow":   { "type": "boolean" },
+    "warning": { "type": "boolean" },
+    "reason":  { "type": "string" },
+    "fired_policies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["cb_policy_id", "name", "action"],
+        "properties": {
+          "cb_policy_id": { "type": "string" },
+          "name":         { "type": "string" },
+          "action":       { "type": "string" }
+        }
+      }
+    },
+    "anchor": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["ledger_index", "hash"],
+          "properties": {
+            "ledger_index": { "type": "integer" },
+            "hash":         { "type": "string" }
+          }
+        }
+      ]
+    },
+    "checked_at":       { "type": "string" },
+    "latency_ms":       { "type": "number" },
+    "route_latency_ms": { "type": "number" }
+  }
+}

@@ -1,0 +1,187 @@
+name: Promote SDK Release
+
+# Coordinated release of every Concordex SDK at a single spec version.
+#
+# Trigger: push a `v<version>` tag to this repo (matching VERSION).
+# Sequence:
+#   1. Verify each SDK repo has a release branch tagged at the same version.
+#   2. Verify each SDK repo's spec-conformance check is green at the tag.
+#   3. Dispatch publish.yml to each SDK repo in parallel.
+#   4. Poll each registry for the artifact.
+#   5. Mark the spec release promoted, or yank on partial failure.
+#
+# Required secrets:
+#   - GH_DISPATCH_TOKEN: a fine-grained PAT with `repo:write` on all four
+#     SDK repos. Repository_dispatch is the cross-repo trigger mechanism.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+  workflow_dispatch:
+    inputs:
+      spec_version:
+        description: 'Spec version to promote (e.g. 0.5.0). Must match VERSION.'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  SDK_REPOS: |
+    praeceptor-thesis/concordex-sdk-python
+    praeceptor-thesis/concordex-sdk-typescript
+    praeceptor-thesis/concordex-sdk-csharp
+    praeceptor-thesis/concordex-sdk-java
+
+jobs:
+  resolve-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          if [ -n "${{ inputs.spec_version }}" ]; then
+            VERSION="${{ inputs.spec_version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          FILE_VERSION="$(cat VERSION | tr -d '[:space:]')"
+          if [ "$VERSION" != "$FILE_VERSION" ]; then
+            echo "::error::tag $VERSION does not match VERSION file $FILE_VERSION"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  verify-conformance:
+    needs: resolve-version
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk:
+          - concordex-sdk-python
+          - concordex-sdk-typescript
+          - concordex-sdk-csharp
+          - concordex-sdk-java
+    steps:
+      - name: Verify release branch exists in ${{ matrix.sdk }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_DISPATCH_TOKEN }}
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          gh api -X GET \
+            "/repos/praeceptor-thesis/${{ matrix.sdk }}/branches/release%2Fv${VERSION}" \
+            > /dev/null
+
+      - name: Verify spec-conformance status check is green
+        env:
+          GH_TOKEN: ${{ secrets.GH_DISPATCH_TOKEN }}
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          SHA=$(gh api "/repos/praeceptor-thesis/${{ matrix.sdk }}/branches/release%2Fv${VERSION}" \
+                 --jq '.commit.sha')
+          STATE=$(gh api "/repos/praeceptor-thesis/${{ matrix.sdk }}/commits/${SHA}/check-runs" \
+                  --jq ".check_runs[] | select(.name == \"spec-conformance/${VERSION}\") | .conclusion" \
+                  | head -n1)
+          if [ "$STATE" != "success" ]; then
+            echo "::error::spec-conformance/${VERSION} not green for ${{ matrix.sdk }} — got: $STATE"
+            exit 1
+          fi
+
+  dispatch-publish:
+    needs: [resolve-version, verify-conformance]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk:
+          - concordex-sdk-python
+          - concordex-sdk-typescript
+          - concordex-sdk-csharp
+          - concordex-sdk-java
+    steps:
+      - name: Dispatch publish to ${{ matrix.sdk }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_DISPATCH_TOKEN }}
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          gh api -X POST \
+            "/repos/praeceptor-thesis/${{ matrix.sdk }}/dispatches" \
+            -f event_type=publish \
+            -F client_payload[version]="${VERSION}"
+
+  verify-registries:
+    needs: [resolve-version, dispatch-publish]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait + poll registries
+        env:
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          # Give publishers a head start. Registry CDNs (especially PyPI
+          # and Maven Central) can take minutes to index.
+          sleep 60
+          DEADLINE=$(( $(date +%s) + 1800 ))
+          POLLED_PYPI=0; POLLED_NPM=0; POLLED_NUGET=0; POLLED_MAVEN=0
+          while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+            if [ "$POLLED_PYPI" -eq 0 ] && curl -sf -o /dev/null \
+              "https://pypi.org/pypi/concordex/${VERSION}/json"; then
+              echo "pypi: confirmed"; POLLED_PYPI=1
+            fi
+            if [ "$POLLED_NPM" -eq 0 ] && curl -sf -o /dev/null \
+              "https://registry.npmjs.org/@concordex/sdk/${VERSION}"; then
+              echo "npm: confirmed"; POLLED_NPM=1
+            fi
+            if [ "$POLLED_NUGET" -eq 0 ] && curl -sf -o /dev/null \
+              "https://api.nuget.org/v3-flatcontainer/concordex.sdk/${VERSION}/concordex.sdk.${VERSION}.nupkg"; then
+              echo "nuget: confirmed"; POLLED_NUGET=1
+            fi
+            if [ "$POLLED_MAVEN" -eq 0 ] && curl -sf -o /dev/null \
+              "https://repo1.maven.org/maven2/dev/concordex/concordex-sdk/${VERSION}/concordex-sdk-${VERSION}.pom"; then
+              echo "maven: confirmed"; POLLED_MAVEN=1
+            fi
+            if [ "$POLLED_PYPI" -eq 1 ] && [ "$POLLED_NPM" -eq 1 ] \
+               && [ "$POLLED_NUGET" -eq 1 ] && [ "$POLLED_MAVEN" -eq 1 ]; then
+              echo "all four registries confirmed"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::deadline expired before all registries confirmed"
+          echo "::error::pypi=$POLLED_PYPI npm=$POLLED_NPM nuget=$POLLED_NUGET maven=$POLLED_MAVEN"
+          exit 1
+
+  promote:
+    needs: [resolve-version, verify-registries]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mark release promoted
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          gh release edit "v${VERSION}" \
+            --notes-file CHANGELOG.md \
+            --latest \
+            --prerelease=false
+
+  yank-on-failure:
+    if: failure()
+    needs: [resolve-version, verify-registries]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open issue for coordinated yank
+        env:
+          GH_TOKEN: ${{ secrets.GH_DISPATCH_TOKEN }}
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          gh issue create \
+            --repo praeceptor-thesis/concordex-sdk-spec \
+            --title "[yank] v${VERSION} partial publish — manual cleanup required" \
+            --body "Promotion failed. Some registries may have accepted the publish; others did not.\n\nYank PyPI: \`pip yank concordex==${VERSION}\` via maintainer.\nDeprecate npm: \`npm deprecate @concordex/sdk@${VERSION} 'yanked: partial publish'\`.\nNuGet: unlist via portal (NuGet has no delete after retention).\nMaven Central: file a ticket — yanks are manual."
