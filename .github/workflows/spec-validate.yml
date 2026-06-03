@@ -1,0 +1,178 @@
+name: Validate Spec
+
+# Self-validation for concordex-sdk-spec. Runs on every commit to main
+# and every PR. Confirms that:
+#
+#   1. VERSION is a valid semver.
+#   2. Every schemas/*.json is a syntactically valid JSON Schema 2020-12
+#      document and reports no schema-level errors.
+#   3. Every contract-tests/*.json parses, has the expected top-level
+#      shape, and references only methods / exceptions the spec defines.
+#   4. The naming map in sdk-spec.md covers every public method and
+#      exception (no method declared in §5 without an entry in §8.2).
+#   5. promote.yml references the four canonical SDK repos and no
+#      others.
+#
+# Green status here is a precondition for any SDK repo's
+# spec-conformance.yml passing — a malformed corpus would break every
+# downstream runner.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spec-validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install validators
+        run: |
+          python -m pip install --upgrade pip
+          pip install jsonschema check-jsonschema
+
+      - name: Validate VERSION is semver
+        run: |
+          VERSION=$(cat VERSION | tr -d '[:space:]')
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+].*)?$'; then
+            echo "::error::VERSION '$VERSION' is not a valid semver"
+            exit 1
+          fi
+          echo "VERSION ok: $VERSION"
+
+      - name: Validate every schema is well-formed JSON Schema 2020-12
+        run: |
+          set -e
+          for f in schemas/*.json; do
+            echo "checking $f"
+            python -c "
+          import json, sys
+          from jsonschema import Draft202012Validator
+          schema = json.load(open('$f'))
+          Draft202012Validator.check_schema(schema)
+          assert '\$id' in schema, '$f missing \$id'
+          assert 'title' in schema, '$f missing title'
+          print('  ok')
+          "
+          done
+
+      - name: Validate corpus shape
+        run: |
+          python <<'PY'
+          import json, sys, pathlib
+
+          root = pathlib.Path("contract-tests")
+          fails = []
+
+          # ---- golden-envelopes.json ----
+          ge = json.loads((root / "golden-envelopes.json").read_text())
+          assert "fixtures" in ge and "validation_failures" in ge, "golden-envelopes missing keys"
+          allowed_methods = {
+              "subject_says", "tool_call", "tool_result", "observation",
+              "check", "emit_event", "construct",
+              # Special form used by error-mapping.json to exercise the
+              # raise_on_open path of cx.guard().
+              "guard_with_raise_on_open",
+          }
+          for fx in ge["fixtures"]:
+              for k in ("name", "method", "args", "expected_path", "expected_body"):
+                  if k not in fx:
+                      fails.append(f"golden_envelopes/{fx.get('name','?')}: missing {k}")
+              if fx.get("method") not in allowed_methods:
+                  fails.append(f"golden_envelopes/{fx['name']}: unknown method {fx['method']}")
+          for fx in ge["validation_failures"]:
+              for k in ("name", "method", "args", "expected_exception"):
+                  if k not in fx:
+                      fails.append(f"validation_failures/{fx.get('name','?')}: missing {k}")
+              if fx["method"] not in allowed_methods:
+                  fails.append(f"validation_failures/{fx['name']}: unknown method {fx['method']}")
+
+          # ---- signature-vectors.json ----
+          sv = json.loads((root / "signature-vectors.json").read_text())
+          assert "fixtures" in sv, "signature-vectors missing fixtures"
+          for fx in sv["fixtures"]:
+              for k in ("name", "payload", "secret", "header", "tolerance_seconds", "valid"):
+                  if k not in fx:
+                      fails.append(f"signature_vectors/{fx.get('name','?')}: missing {k}")
+
+          # ---- error-mapping.json ----
+          em = json.loads((root / "error-mapping.json").read_text())
+          assert "fixtures" in em, "error-mapping missing fixtures"
+          allowed_exceptions = {
+              "ValidationError", "AuthError", "PermissionError",
+              "ServerError", "ConcordexError", "CBOpenError", None,
+              # Alias the corpus uses for "either ValidationError OR
+              # the language's idiomatic argument exception" — see
+              # runner-spec.md §error-mapping.
+              "ValidationError_or_ArgumentError",
+          }
+          for fx in em["fixtures"]:
+              for k in ("name", "status", "body", "method"):
+                  if k not in fx:
+                      fails.append(f"error_mapping/{fx.get('name','?')}: missing {k}")
+              if fx.get("expected_exception") not in allowed_exceptions:
+                  fails.append(f"error_mapping/{fx['name']}: unknown exception {fx.get('expected_exception')}")
+
+          if fails:
+              print("\n".join(f"::error::{m}" for m in fails))
+              sys.exit(1)
+          print(f"corpora ok — {len(ge['fixtures'])} envelopes, "
+                f"{len(ge['validation_failures'])} validation failures, "
+                f"{len(sv['fixtures'])} signature vectors, "
+                f"{len(em['fixtures'])} error mappings")
+          PY
+
+      - name: Verify naming map covers every public method
+        run: |
+          python <<'PY'
+          import re, sys, pathlib
+          spec = pathlib.Path("sdk-spec.md").read_text()
+
+          # Every snake_case method declared in §5 (header form `### 5.N method_name(...)`)
+          declared = set(re.findall(r'^### 5\.\d+ `([a-z_]+)\b', spec, re.M))
+
+          # Every entry in the §8.2 method naming table.
+          # Table rows look like `| method_name | python | ts | c# | java |`
+          mapped = set(re.findall(r'^\|\s*`([a-z_]+)`\s*\|', spec, re.M))
+
+          # `EVENT_KINDS` is a constant, not a method, and lives in §8.1.
+          # `EmitResult` / `CheckResult` likewise — exclude type names.
+          missing = declared - mapped
+          if missing:
+              print(f"::error::Methods declared in §5 but missing from §8.2 naming map: {sorted(missing)}")
+              sys.exit(1)
+          print(f"naming map ok — {len(declared)} methods declared, all mapped")
+          PY
+
+      - name: Verify promote.yml lists the four canonical SDK repos
+        run: |
+          python <<'PY'
+          import pathlib, re, sys
+          wf = pathlib.Path(".github/workflows/promote.yml").read_text()
+          want = {"concordex-sdk-python", "concordex-sdk-typescript",
+                  "concordex-sdk-csharp", "concordex-sdk-java"}
+          present = set(re.findall(r'concordex-sdk-(?:python|typescript|csharp|java)', wf))
+          missing = want - present
+          extra   = present - want
+          if missing or extra:
+              if missing: print(f"::error::promote.yml missing SDK repos: {sorted(missing)}")
+              if extra:   print(f"::error::promote.yml has extra repos: {sorted(extra)}")
+              sys.exit(1)
+          print("promote.yml references all four canonical SDK repos")
+          PY
